@@ -141,20 +141,31 @@ jobs:
           bash scripts/check-firmware-artifacts.sh \
             --config .config \
             --directory bin/targets/airoha/an7581
-          kernel_config=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 -path '*/linux-*/.config' -print -quit)
+          # ── 必须锁定「真正的主内核」配置 ────────────────────────────────
+          # 注意：不能写成 -path '*/linux-*/.config'，那是贪婪匹配，会命中
+          #   mac80211-regular/backports-7.2/.config   ← backports（无线驱动）配置
+          # 它是 find 先遍历到的目录（字母序 mac80211 < linux-6.18.x 之外的情形），
+          # 且其符号带 CPTCFG_ 前缀（CPTCFG_NET_AIROHA_NPU=y），不含 CONFIG_ 前缀，
+          # 于是自检脚本 grep '^CONFIG_NET_AIROHA_NPU=y$' 必然落空而误报。
+          # 内核目录形如 <subtarget>/linux-6.18.54，正好在 subtarget 下一层，
+          # 用 -maxdepth 2 限定深度即可精确锁定，与 backports-* 无关。
+          kernel_config=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
+            -maxdepth 2 -path '*linux-*/.config' -print -quit)
           manifest=$(find bin/targets/airoha/an7581 -maxdepth 1 -type f -name '*manifest' -print -quit)
           test -n "$kernel_config"
           test -n "$manifest"
-          # ── 诊断输出（10.9：定位 NET_AIROHA_NPU=y 丢失的位置）──────────
+          # ── 诊断输出（10.9：定位 NET_AIROHA_NPU=y 的真实状态）───────────
           echo "=== built kernel config: $kernel_config ==="
           echo "--- AIROHA 相关符号 ---"
           grep -E 'AIROHA' "$kernel_config" || echo '(no AIROHA lines in built kernel config!)'
-          kernel_override=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 -path '*/linux-*/.config.override' -print -quit)
+          kernel_override=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
+            -maxdepth 2 -path '*linux-*/.config.override' -print -quit)
           echo "--- .config.override（包元数据对内核的覆盖）：$kernel_override ---"
           if [ -n "$kernel_override" ]; then
             grep -E 'AIROHA' "$kernel_override" || echo '(no AIROHA lines in override)'
           fi
-          kernel_target=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 -path '*/linux-*/.config.target' -print -quit)
+          kernel_target=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
+            -maxdepth 2 -path '*linux-*/.config.target' -print -quit)
           echo "--- .config.target（target+generic 合并结果）：$kernel_target ---"
           if [ -n "$kernel_target" ]; then
             grep -E 'NET_VENDOR_AIROHA|NET_AIROHA' "$kernel_target" || echo '(no NET_AIROHA lines in target)'

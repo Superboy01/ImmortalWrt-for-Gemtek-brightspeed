@@ -14,5 +14,17 @@ src-git easytier https://github.com/EasyTier/luci-app-easytier.git;main
 src-git openwrt_bandix https://github.com/timsaya/openwrt-bandix.git;main
 src-git luci_app_bandix https://github.com/timsaya/luci-app-bandix.git;main
 src-git helloworld https://github.com/fw876/helloworld.git;dev
-src-git pushbot https://github.com/zzsj0928/luci-app-pushbot.git
+#
+# ── pushbot 必须关掉（原因见指南 10.6）─────────────────────────────
+# zzsj0928/luci-app-pushbot 整个仓库只有一个「放在仓库根目录」的 Makefile，
+# 而 feeds 扫描器只支持 feeds/<feed>/<包名>/Makefile 两级结构，会把该 Makefile
+# 的注释正文当成包目录名写进索引，导致 `feeds update -a` 崩在：
+#   *** target pattern contains no '%'.  Stop.
+# 1710.config 里没有任何 pushbot 包，关掉不影响固件内容。
+#src-git pushbot https://github.com/zzsj0928/luci-app-pushbot.git
+#
+# 若确实需要 Pushbot：保持上面那行注释，改用下面这行（与 luci-theme-glass
+# 同一写法，--directory 让扫描器按两级结构处理，可正常生成索引）。
+#src-git --directory=pushbot pushbot https://github.com/zzsj0928/luci-app-pushbot.git
+# ──────────────────────────────────────────────────────────────
 src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main

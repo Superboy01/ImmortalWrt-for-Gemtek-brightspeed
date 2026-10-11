@@ -94,6 +94,19 @@ jobs:
           VERSION_CODE='${{ steps.version.outputs.version_code }}' \
           bash scripts/set-build-version.sh .config
           make defconfig
+          # ── 修复上游自检死结：详见指南 10.8 ────────────────────────────────
+          # package/network/config/airoha-an7581-mt7996-board 声明了 HIDDEN:=1，
+          # OpenWrt 为隐藏包生成的 Kconfig 符号没有 prompt
+          #（scripts/package-metadata.pl 第 367-368 行：hidden 时 title 置空），
+          # 所以 .config 里给这个包写什么值都会被 kconfig 丢弃并重新计算；在
+          # TARGET_PER_DEVICE_ROOTFS=y 下它只能算成 =m，而自检脚本要求精确 =y。
+          # 此处把这一行强制写回 =y（等价于 9-23 那版能正常出固件的状态）。
+          if grep -q '^CONFIG_PACKAGE_airoha-an7581-mt7996-board=' .config; then
+            sed -i 's|^CONFIG_PACKAGE_airoha-an7581-mt7996-board=.*$|CONFIG_PACKAGE_airoha-an7581-mt7996-board=y|' .config
+          else
+            echo 'CONFIG_PACKAGE_airoha-an7581-mt7996-board=y' >> .config
+          fi
+          # ─────────────────────────────────────────────────────────────────
           bash scripts/check-gemtek-profile-isolation.sh --config .config
           grep -E 'CONFIG_(IMAGEOPT|EXTRA_IMAGE_NAME|VERSIONOPT|VERSION_DIST|VERSION_NUMBER|VERSION_CODE|VERSION_FILENAMES|VERSION_CODE_FILENAMES)[= ]' .config
 

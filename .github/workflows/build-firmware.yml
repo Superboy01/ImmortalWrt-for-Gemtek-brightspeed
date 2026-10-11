@@ -145,6 +145,21 @@ jobs:
           manifest=$(find bin/targets/airoha/an7581 -maxdepth 1 -type f -name '*manifest' -print -quit)
           test -n "$kernel_config"
           test -n "$manifest"
+          # ── 诊断输出（10.9：定位 NET_AIROHA_NPU=y 丢失的位置）──────────
+          echo "=== built kernel config: $kernel_config ==="
+          echo "--- AIROHA 相关符号 ---"
+          grep -E 'AIROHA' "$kernel_config" || echo '(no AIROHA lines in built kernel config!)'
+          kernel_override=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 -path '*/linux-*/.config.override' -print -quit)
+          echo "--- .config.override（包元数据对内核的覆盖）：$kernel_override ---"
+          if [ -n "$kernel_override" ]; then
+            grep -E 'AIROHA' "$kernel_override" || echo '(no AIROHA lines in override)'
+          fi
+          kernel_target=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 -path '*/linux-*/.config.target' -print -quit)
+          echo "--- .config.target（target+generic 合并结果）：$kernel_target ---"
+          if [ -n "$kernel_target" ]; then
+            grep -E 'NET_VENDOR_AIROHA|NET_AIROHA' "$kernel_target" || echo '(no NET_AIROHA lines in target)'
+          fi
+          # ─────────────────────────────────────────────────────────────
           bash scripts/check-gemtek-profile-isolation.sh \
             --config .config \
             --kernel-config "$kernel_config" \

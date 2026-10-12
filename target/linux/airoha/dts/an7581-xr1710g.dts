@@ -198,7 +198,13 @@
 	};
 };
 &i2c0 {
-	compatible = "airoha,airoha-i2c";
+	/* 修复 10.11：上游 9/27 拆分 DTS 时把 compatible 改成了 "airoha,airoha-i2c"，
+	 * 但内核里不存在绑定该 compatible 的驱动（主线 i2c-mt7621.c 只认
+	 * "mediatek,mt7621-i2c"），导致 i2c0 无法注册、nct7802 风扇芯片失踪，
+	 * 表现为"主板温度/风扇 PWM/风扇转速"全部为 0。
+	 * 9/16 作者原版固件的 DTS 没有这行覆盖，所以当时一切正常。
+	 * 改回 dtsi 的原 compatible；clock-frequency=400k 对 nct7802 无害。 */
+	compatible = "mediatek,mt7621-i2c";
 	clock-frequency = <400000>;
 	status = "okay";
 	hwmon@2e {

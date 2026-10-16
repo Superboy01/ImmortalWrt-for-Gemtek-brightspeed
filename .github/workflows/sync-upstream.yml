@@ -26,15 +26,17 @@ jobs:
           git tag backup-before-sync-$(date +%Y%m%d-%H%M)
           git push origin --tags
 
-      - name: Merge upstream (naoki66, NOT official ImmortalWrt)
+      - name: Merge upstream
         run: |
           git remote add upstream https://github.com/naoki66/ImmortalWrt-for-Gemtek-brightspeed.git 2>/dev/null || true
           git fetch upstream
           git merge --no-edit upstream/master || {
-            echo "::error::Merge failed due to conflicts. master is UNCHANGED and safe."
-            echo "Conflicted files:"
-            git diff --name-only --diff-filter=U
-            exit 1
+            echo "::warning::Conflict detected - auto resolving (keep upstream, restore my custom feeds)"
+            git diff --name-only --diff-filter=U | tee /tmp/conflicts.txt | xargs -r git checkout --theirs
+            grep -q "OpenWrt-nikki" feeds.conf.default || printf 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main\n' >> feeds.conf.default
+            git add -A
+            git commit --no-edit
+            echo "Auto-resolved conflicting files:"; cat /tmp/conflicts.txt
           }
           git push origin master
 

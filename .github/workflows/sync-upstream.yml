@@ -1,0 +1,43 @@
+name: Sync upstream (with backup)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/sync-upstream.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Create backup tag before merging
+        run: |
+          git config user.name "Superboy01"
+          git config user.email "142149607+Superboy01@users.noreply.github.com"
+          git tag backup-before-sync-$(date +%Y%m%d-%H%M)
+          git push origin --tags
+
+      - name: Merge upstream (naoki66, NOT official ImmortalWrt)
+        run: |
+          git remote add upstream https://github.com/naoki66/ImmortalWrt-for-Gemtek-brightspeed.git 2>/dev/null || true
+          git fetch upstream
+          git merge --no-edit upstream/master || {
+            echo "::error::Merge failed due to conflicts. master is UNCHANGED and safe."
+            echo "Conflicted files:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          }
+          git push origin master
+
+      - name: Show result
+        if: always()
+        run: git log --oneline -5 || true

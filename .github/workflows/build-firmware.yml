@@ -51,7 +51,6 @@ jobs:
           upstream_base=$(git merge-base HEAD upstream/master)
           upstream_commit=$(git rev-parse --short=8 "$upstream_base")
           build_id="${build_date}-${repo_commit}-${upstream_commit}"
-          # 文件名只保留 “日期-本机commit”，完整 build_id 落到 VERSION_CODE
           version_number="${build_date}-${repo_commit}"
           version_code="${build_id}"
 
@@ -94,19 +93,11 @@ jobs:
           VERSION_CODE='${{ steps.version.outputs.version_code }}' \
           bash scripts/set-build-version.sh .config
           make defconfig
-          # ── 修复上游自检死结：详见指南 10.8 ────────────────────────────────
-          # package/network/config/airoha-an7581-mt7996-board 声明了 HIDDEN:=1，
-          # OpenWrt 为隐藏包生成的 Kconfig 符号没有 prompt
-          #（scripts/package-metadata.pl 第 367-368 行：hidden 时 title 置空），
-          # 所以 .config 里给这个包写什么值都会被 kconfig 丢弃并重新计算；在
-          # TARGET_PER_DEVICE_ROOTFS=y 下它只能算成 =m，而自检脚本要求精确 =y。
-          # 此处把这一行强制写回 =y（等价于 9-23 那版能正常出固件的状态）。
           if grep -q '^CONFIG_PACKAGE_airoha-an7581-mt7996-board=' .config; then
             sed -i 's|^CONFIG_PACKAGE_airoha-an7581-mt7996-board=.*$|CONFIG_PACKAGE_airoha-an7581-mt7996-board=y|' .config
           else
             echo 'CONFIG_PACKAGE_airoha-an7581-mt7996-board=y' >> .config
           fi
-          # ─────────────────────────────────────────────────────────────────
           bash scripts/check-gemtek-profile-isolation.sh --config .config
           grep -E 'CONFIG_(IMAGEOPT|EXTRA_IMAGE_NAME|VERSIONOPT|VERSION_DIST|VERSION_NUMBER|VERSION_CODE|VERSION_FILENAMES|VERSION_CODE_FILENAMES)[= ]' .config
 
@@ -118,22 +109,40 @@ jobs:
         run: |
           make -j2 world 2>&1 | tee build.log
 
+      # ───────── 增强版失败诊断步骤（替换原 Verbose retry）───────────
       - name: Verbose retry on build failure
         if: failure()
         shell: bash
         run: |
-          failed_pkg=$(grep 'ERROR:.*failed to build' build.log | head -1 | sed 's/.*ERROR: \(.*\) failed to build.*/\1/' || true)
-          if [ -n "$failed_pkg" ]; then
-            echo "=== Rebuilding $failed_pkg with V=s ==="
-            make "package/$failed_pkg/compile" V=s -j1 2>&1 | tee build-verbose.log || true
-            echo "=== First errors in build-verbose.log ==="
-            grep -nE "error:|Error [0-9]|FAILED|Patch failed|No rule to make target" build-verbose.log | head -40 || true
-            echo "=== tail of build-verbose.log ==="
-            tail -80 build-verbose.log || true
+          set +e
+          failed_pkg=$(grep -m1 'ERROR:.*failed to build' build.log | sed 's/.*ERROR: \(.*\) failed to build.*/\1')
+          if [ -z "$failed_pkg" ]; then
+            echo "未能从 build.log 识别失败包，直接打印末尾 200 行"
+            tail -200 build.log | tee -a build-verbose.log
           else
-            echo "No failing package found in build.log" >&2
-            tail -150 build.log || true
+            echo "识别到失败包: $failed_pkg"
+            echo "=== 以 V=s -j1 重新编译 $failed_pkg ==="
+            make "package/$failed_pkg/compile" V=s -j1 2>&1 | tee build-verbose.log
+            echo "=== 失败包在 build.log 中的上下文 ==="
+            grep -nE -B5 -A10 "ERROR:.*$failed_pkg" build.log | head -60 || true
           fi
+
+          echo "=== 关键错误（带上下文，最多 150 行）==="
+          grep -nE -B3 -A12 "error:|Error [0-9]|\berror\b|FAILED|Patch failed|No rule to make target|undeclared|not found" build-verbose.log | head -150 || true
+          echo "=== build-verbose.log 末尾 120 行 ==="
+          tail -120 build-verbose.log || true
+
+          # 同步写入 Summary 页，方便直接查看
+          {
+            echo "### 编译失败诊断"
+            echo
+            echo "失败包：\`${failed_pkg:-未识别}\`"
+            echo
+            echo '```'
+            grep -nE -B3 -A12 "error:|Error [0-9]|FAILED|Patch failed|No rule to make target|undeclared" build-verbose.log 2>/dev/null | head -150
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: Verify device isolation
         shell: bash
@@ -141,36 +150,26 @@ jobs:
           bash scripts/check-firmware-artifacts.sh \
             --config .config \
             --directory bin/targets/airoha/an7581
-          # ── 必须锁定「真正的主内核」配置 ────────────────────────────────
-          # 注意：不能写成 -path '*/linux-*/.config'，那是贪婪匹配，会命中
-          #   mac80211-regular/backports-7.2/.config   ← backports（无线驱动）配置
-          # 它是 find 先遍历到的目录（字母序 mac80211 < linux-6.18.x 之外的情形），
-          # 且其符号带 CPTCFG_ 前缀（CPTCFG_NET_AIROHA_NPU=y），不含 CONFIG_ 前缀，
-          # 于是自检脚本 grep '^CONFIG_NET_AIROHA_NPU=y$' 必然落空而误报。
-          # 内核目录形如 <subtarget>/linux-6.18.54，正好在 subtarget 下一层，
-          # 用 -maxdepth 2 限定深度即可精确锁定，与 backports-* 无关。
           kernel_config=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
             -maxdepth 2 -path '*linux-*/.config' -print -quit)
           manifest=$(find bin/targets/airoha/an7581 -maxdepth 1 -type f -name '*manifest' -print -quit)
           test -n "$kernel_config"
           test -n "$manifest"
-          # ── 诊断输出（10.9：定位 NET_AIROHA_NPU=y 的真实状态）───────────
           echo "=== built kernel config: $kernel_config ==="
           echo "--- AIROHA 相关符号 ---"
           grep -E 'AIROHA' "$kernel_config" || echo '(no AIROHA lines in built kernel config!)'
           kernel_override=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
             -maxdepth 2 -path '*linux-*/.config.override' -print -quit)
-          echo "--- .config.override（包元数据对内核的覆盖）：$kernel_override ---"
+          echo "--- .config.override：$kernel_override ---"
           if [ -n "$kernel_override" ]; then
             grep -E 'AIROHA' "$kernel_override" || echo '(no AIROHA lines in override)'
           fi
           kernel_target=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
             -maxdepth 2 -path '*linux-*/.config.target' -print -quit)
-          echo "--- .config.target（target+generic 合并结果）：$kernel_target ---"
+          echo "--- .config.target：$kernel_target ---"
           if [ -n "$kernel_target" ]; then
             grep -E 'NET_VENDOR_AIROHA|NET_AIROHA' "$kernel_target" || echo '(no NET_AIROHA lines in target)'
           fi
-          # ─────────────────────────────────────────────────────────────
           bash scripts/check-gemtek-profile-isolation.sh \
             --config .config \
             --kernel-config "$kernel_config" \

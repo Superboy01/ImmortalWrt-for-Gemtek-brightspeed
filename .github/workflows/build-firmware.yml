@@ -79,8 +79,9 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           bash scripts/fix-stale-golang-host.sh
-          # 删除与 miniupnpd 2.3.11 源码冲突的失效补丁（上游 feed 遗留，导致 5/7 hunks 失败）
-          rm -f feeds/packages/net/miniupnpd/patches/020-descr-filter-fix.patch
+          # miniupnpd 2.3.11 与 feed 中全部补丁均已不匹配（020 5/7、030 1/1 hunks 失败），
+          # 补丁内容多已被上游 2.3.11 吸收，整体移除以避免逐个试错
+          rm -f feeds/packages/net/miniupnpd/patches/*.patch
 
       - name: Apply feed patches
         run: FEED_PATCHES_STRICT=1 bash scripts/apply-feed-patches.sh

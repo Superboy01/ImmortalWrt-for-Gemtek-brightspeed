@@ -79,6 +79,8 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           bash scripts/fix-stale-golang-host.sh
+          # 删除与 miniupnpd 2.3.11 源码冲突的失效补丁（上游 feed 遗留，导致 5/7 hunks 失败）
+          rm -f feeds/packages/net/miniupnpd/patches/020-descr-filter-fix.patch
 
       - name: Apply feed patches
         run: FEED_PATCHES_STRICT=1 bash scripts/apply-feed-patches.sh
@@ -93,11 +95,17 @@ jobs:
           VERSION_CODE='${{ steps.version.outputs.version_code }}' \
           bash scripts/set-build-version.sh .config
           make defconfig
+          # ── 修复上游自检死结 ──────────────────────────────────────────
+          # package/network/config/airoha-an7581-mt7996-board 声明了 HIDDEN:=1，
+          # 隐藏包生成的 Kconfig 符号没有 prompt，.config 里写什么都会被丢弃重算；
+          # TARGET_PER_DEVICE_ROOTFS=y 下它只能算成 =m，而自检脚本要求精确 =y。
+          # 此处强制写回 =y。
           if grep -q '^CONFIG_PACKAGE_airoha-an7581-mt7996-board=' .config; then
-            sed -i 's|^CONFIG_PACKAGE_airoha-an7581-mt7996-board=.*$|CONFIG_PACKAGE_airoha-an7581-mt7996-board=y|' .config
+            sed -i 's|^CONFIG_PACKAGE_airoha-an7581-mt7996-board=.*|CONFIG_PACKAGE_airoha-an7581-mt7996-board=y|' .config
           else
             echo 'CONFIG_PACKAGE_airoha-an7581-mt7996-board=y' >> .config
           fi
+          # ─────────────────────────────────────────────────────────────
           bash scripts/check-gemtek-profile-isolation.sh --config .config
           grep -E 'CONFIG_(IMAGEOPT|EXTRA_IMAGE_NAME|VERSIONOPT|VERSION_DIST|VERSION_NUMBER|VERSION_CODE|VERSION_FILENAMES|VERSION_CODE_FILENAMES)[= ]' .config
 
@@ -109,37 +117,34 @@ jobs:
         run: |
           make -j2 world 2>&1 | tee build.log
 
-      # ───────── 增强版失败诊断步骤（替换原 Verbose retry）───────────
       - name: Verbose retry on build failure
         if: failure()
         shell: bash
         run: |
           set +e
-          failed_pkg=$(grep -m1 'ERROR:.*failed to build' build.log | sed 's/.*ERROR: \(.*\) failed to build.*/\1')
+          # 从 build.log 的 ERROR 行里直接提取 "package/..."（不用 sed，避免转义问题）
+          err_line=$(grep -m1 'failed to build' build.log || true)
+          failed_pkg=$(printf '%s\n' "$err_line" | grep -oE 'package/[A-Za-z0-9_./-]+' | head -1 || true)
           if [ -z "$failed_pkg" ]; then
-            echo "未能从 build.log 识别失败包，直接打印末尾 200 行"
-            tail -200 build.log | tee -a build-verbose.log
+            echo "未能从 build.log 识别失败包，打印末尾 200 行"
+            tail -200 build.log | tee build-verbose.log
           else
             echo "识别到失败包: $failed_pkg"
             echo "=== 以 V=s -j1 重新编译 $failed_pkg ==="
-            make "package/$failed_pkg/compile" V=s -j1 2>&1 | tee build-verbose.log
+            make "$failed_pkg/compile" V=s -j1 2>&1 | tee build-verbose.log
             echo "=== 失败包在 build.log 中的上下文 ==="
-            grep -nE -B5 -A10 "ERROR:.*$failed_pkg" build.log | head -60 || true
+            grep -nE -B5 -A10 "ERROR:.*$(basename "$failed_pkg")" build.log | head -60 || true
           fi
-
-          echo "=== 关键错误（带上下文，最多 150 行）==="
-          grep -nE -B3 -A12 "error:|Error [0-9]|\berror\b|FAILED|Patch failed|No rule to make target|undeclared|not found" build-verbose.log | head -150 || true
-          echo "=== build-verbose.log 末尾 120 行 ==="
-          tail -120 build-verbose.log || true
-
-          # 同步写入 Summary 页，方便直接查看
+          echo "=== 关键错误（带上下文，最多 200 行）==="
+          grep -nE -B5 -A20 "error:|Error [0-9]|FAILED|Patch failed|No rule to make target|undeclared|not found|implicit declaration" build-verbose.log | head -200 || true
+          echo "=== build-verbose.log 末尾 150 行 ==="
+          tail -150 build-verbose.log || true
+          # 同步写入 Summary 页
           {
-            echo "### 编译失败诊断"
-            echo
-            echo "失败包：\`${failed_pkg:-未识别}\`"
+            echo "### 编译失败诊断：${failed_pkg:-未识别}"
             echo
             echo '```'
-            grep -nE -B3 -A12 "error:|Error [0-9]|FAILED|Patch failed|No rule to make target|undeclared" build-verbose.log 2>/dev/null | head -150
+            grep -nE -B5 -A20 "error:|Error [0-9]|FAILED|Patch failed|No rule to make target|undeclared" build-verbose.log 2>/dev/null | head -200
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
@@ -150,6 +155,7 @@ jobs:
           bash scripts/check-firmware-artifacts.sh \
             --config .config \
             --directory bin/targets/airoha/an7581
+          # 精确锁定真正的主内核配置（避免命中 backports 的 CPTCFG_ 配置）
           kernel_config=$(find build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581 \
             -maxdepth 2 -path '*linux-*/.config' -print -quit)
           manifest=$(find bin/targets/airoha/an7581 -maxdepth 1 -type f -name '*manifest' -print -quit)

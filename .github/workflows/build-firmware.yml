@@ -79,9 +79,11 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           bash scripts/fix-stale-golang-host.sh
-          # miniupnpd 2.3.11 与 feed 中全部补丁均已不匹配（020 5/7、030 1/1 hunks 失败），
-          # 补丁内容多已被上游 2.3.11 吸收，整体移除以避免逐个试错
-          rm -f feeds/packages/net/miniupnpd/patches/*.patch
+          # miniupnpd 补丁已由上游修复，无需再手动删除：
+          # immortalwrt/packages 2026-10-20 commit e765fb88 "miniupnpd: refresh patches"
+          #   - 删除 020-descr-filter-fix.patch、030-allow-private-fix.patch（已被 2.3.11 吸收）
+          #   - 刷新 010-upnp-igdv2-compat / 040-improve-logging / 900-format-xml 的上下文
+          # 已实测这 3 个补丁按 quilt 顺序可全部应用（详见指南 10.14）
 
           # ── 修复：naoki66 主树缺失 package/libs/libffi ──────────────────
           # immortalwrt/packages 的 lang/python/python3 无条件使用
